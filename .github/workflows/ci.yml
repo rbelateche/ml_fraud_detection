@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package (dev + ml)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[ml,dev]'
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Run tests
+        run: pytest -q --cov=fraud_detection --cov-report=term-missing
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e '.[ml,dev]'
+      - name: Smoke-test pipeline (small dataset)
+        env:
+          FRAUD_SYNTH_N_TRANSACTIONS: "12000"
+          FRAUD_SYNTH_N_CARDS: "1500"
+        run: |
+          fraud-data --force
+          fraud-eda
+          fraud-baseline
+          fraud-bakeoff --quick
