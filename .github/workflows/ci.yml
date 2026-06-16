@@ -50,4 +50,3 @@ jobs:
           fraud-data --force
           fraud-eda
           fraud-baseline
-          fraud-bakeoff --quick
