@@ -31,8 +31,8 @@ This repository is built in phases. Each phase is delivered on its own branch an
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| **0. Foundations** | Repo, config, data layer, EDA, dummy + logistic baselines, Docker, CI | ✅ this PR |
-| **0.5 Model bake-off** | Multi-model tournament, time-based split, calibration, cost-based threshold, MLflow leaderboard | ⏭ next |
+| **0. Foundations** | Repo, config, data layer, EDA, dummy + logistic baselines, Docker, CI | ✅ |
+| **0.5 Model bake-off** | Multi-model tournament, time-based split, calibration, cost-based threshold, MLflow leaderboard | ✅ |
 | 1. Serving | FastAPI inference, latency benchmark | planned |
 | 2. Features | Feast + Redis online store, offline/online parity | planned |
 | 3. Streaming | Kafka replay → live scoring | planned |
@@ -70,6 +70,7 @@ pip install -e '.[ml,dev]'
 fraud-data        # build the dataset (synthetic by default, no credentials)
 fraud-eda         # write EDA figures to reports/figures/
 fraud-baseline    # train the dummy + logistic baselines and print metrics
+fraud-bakeoff     # run the Phase 0.5 model tournament -> leaderboard + artifacts
 pytest -q         # run the test suite
 ```
 
@@ -77,7 +78,9 @@ pytest -q         # run the test suite
 
 ```bash
 docker compose run --rm pipeline   # data -> EDA -> baselines
+docker compose run --rm bakeoff    # the model tournament
 docker compose run --rm tests      # pytest
+docker compose up mlflow           # MLflow UI at http://localhost:5000
 ```
 
 `make help` lists all developer shortcuts.
@@ -109,6 +112,77 @@ A **Kaggle backend** is included for realism. Switch with `FRAUD_DATA_SOURCE=kag
 
 Both backends emit the **same canonical schema** (`src/fraud_detection/data/schema.py`),
 which is what keeps training and serving consistent.
+
+---
+
+## Phase 0.5 — model bake-off
+
+`fraud-bakeoff` runs a fair, evidence-backed tournament across six candidates
+(dummy, logistic regression, random forest, XGBoost, LightGBM, CatBoost) and
+produces a leaderboard plus the artifacts that justify the final pick.
+
+**Decision rule (stated upfront):** *pick the model that minimises expected
+business cost per transaction at the operating threshold, **subject to p99
+latency < 50 ms.***
+
+### Methodology
+
+1. **Time-based out-of-time split** — train on the past, validate on the middle,
+   test on the future. No random shuffling, so no future leakage.
+2. **Imbalance handled per-model** — class weights / `scale_pos_weight`, not
+   assumed. The comparison reflects tuned-for-imbalance behaviour.
+3. **Optional Optuna tuning** (`--tune`) — equal, small trial budget per model
+   for an apples-to-apples comparison, optimising PR-AUC on validation.
+4. **Calibration comparison** — raw vs Platt (sigmoid) vs isotonic. Calibrators
+   are fit on one half of validation and **selected by Brier on an independent
+   half**, then refit and applied to test. Isotonic is only offered when there
+   are enough positives to support it — the data decides.
+5. **Cost-based threshold** — chosen on validation by minimising expected dollar
+   cost, then reported on test (no threshold leakage).
+6. **Latency** — single-row p50/p99 measured on the fitted pipeline.
+7. **Everything logged to MLflow** — one experiment, one run per model.
+
+### Metrics — fraud-appropriate, not accuracy
+
+PR-AUC (primary), ROC-AUC, recall @ 90% precision, precision @ top-1%, Brier
+score (raw and calibrated), expected **cost per transaction**, and **p50/p99
+latency**.
+
+### Example leaderboard (synthetic data, 120k transactions)
+
+| model | pr_auc | roc_auc | brier_raw | brier_cal | calibration | cost/txn | p50 ms | p99 ms | meets SLA |
+|---|---:|---:|---:|---:|---|---:|---:|---:|:--:|
+| **logistic_regression** | 0.077 | 0.787 | 0.173 | 0.011 | sigmoid | **0.774** | 1.5 | 2.9 | ✅ |
+| catboost | 0.057 | 0.727 | 0.090 | 0.012 | sigmoid | 0.990 | 1.7 | 3.1 | ✅ |
+| lightgbm | 0.039 | 0.701 | 0.024 | 0.012 | sigmoid | 1.013 | 2.4 | 6.7 | ✅ |
+| xgboost | 0.049 | 0.728 | 0.058 | 0.012 | sigmoid | 1.014 | 1.8 | 2.7 | ✅ |
+| dummy | 0.012 | 0.496 | 0.024 | 0.012 | sigmoid | 1.685 | 1.5 | 2.3 | ✅ |
+| random_forest | 0.054 | 0.762 | 0.015 | 0.012 | sigmoid | 0.854 | 29.1 | **62.7** | ❌ |
+
+**Read this result carefully — it is the whole point.** `random_forest` has the
+second-lowest cost, but its **p99 of 62.7 ms breaks the SLA**, so it is
+disqualified. The winner is the model with the lowest cost *among SLA-compliant
+candidates*. A model that wins on cost but blows the latency budget loses — the
+decision rule encodes that automatically.
+
+> **Note on synthetic data:** the generator's signal is partly linear, so logistic
+> regression is competitive here. On categorical-heavy real data (IEEE-CIS),
+> gradient boosters typically win — switch with `FRAUD_DATA_SOURCE=kaggle`. The
+> **methodology** (fair tournament, calibration, cost-under-latency rule) is the
+> transferable part, not the specific winner.
+
+### Artifacts produced
+
+- `artifacts/leaderboard.md` / `.csv` — the full models × metrics table.
+- `artifacts/model_selection_rationale.md` — decision rule + outcome + trade-offs.
+- `artifacts/best_model.joblib` — the winning pipeline + calibrator + threshold,
+  ready for Phase 1 serving.
+- `reports/figures/bakeoff_pr_curves.png` — PR curves overlaid.
+- `reports/figures/bakeoff_reliability.png` — calibration before vs after.
+- `reports/figures/bakeoff_latency_vs_prauc.png` — the latency/PR-AUC trade-off.
+- `reports/figures/bakeoff_cost_curve.png` — cost vs threshold for the winner.
+
+Run `fraud-bakeoff --tune` to add Optuna tuning, or `--quick` for a fast pass.
 
 ---
 
@@ -145,6 +219,14 @@ src/fraud_detection/
   models/
     preprocessing.py   # shared ColumnTransformer
     baseline.py        # dummy + logistic baselines
+    candidates.py      # bake-off candidate registry (6 models)
+    calibration.py     # raw vs sigmoid vs isotonic comparison
+    tuning.py          # optional Optuna tuning (equal budget)
+  bakeoff/
+    runner.py          # tournament orchestrator
+    latency.py         # p50/p99 latency measurement
+    plots.py           # PR / reliability / latency / cost figures
+    cli.py             # `fraud-bakeoff`
 tests/                 # pytest suite
 Dockerfile, docker-compose.yml, Makefile, .github/workflows/ci.yml
 ```

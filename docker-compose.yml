@@ -29,7 +29,7 @@ services:
       context: .
     environment:
       FRAUD_DATA_SOURCE: ${FRAUD_DATA_SOURCE:-synthetic}
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-file:/app/mlruns}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-sqlite:////app/mlruns/mlflow.db}
     volumes:
       - ./data:/app/data
       - ./artifacts:/app/artifacts
@@ -54,7 +54,8 @@ services:
       - "5000:5000"
     volumes:
       - ./mlruns:/app/mlruns
+
     command:
       - "bash"
       - "-lc"
-      - "mlflow ui --host 0.0.0.0 --port 5000 --backend-store-uri file:/app/mlruns"
+      - "mlflow ui --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////app/mlflow.db"
