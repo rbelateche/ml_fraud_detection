@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Tooling
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Data & artifacts (never commit datasets or models).
+# Use dir/* form so the .gitkeep placeholders can be re-included.
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+reports/figures/*
+!reports/figures/.gitkeep
+mlruns/
+mlartifacts/
+
+# Secrets / credentials
+.env
+*.env
+!.env.example
+kaggle.json
+.kaggle/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log

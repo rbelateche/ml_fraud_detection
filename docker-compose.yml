@@ -1,0 +1,60 @@
+# Local stack for Phase 0 + 0.5.
+# Later phases (serving, Redis, Kafka, MLflow server, Grafana) extend this file.
+#
+# Usage:
+#   docker compose run --rm pipeline      # data -> EDA -> baselines
+#   docker compose run --rm bakeoff       # Phase 0.5 model tournament
+#   docker compose run --rm tests         # pytest
+#   docker compose up mlflow              # MLflow tracking UI at :5000
+
+services:
+  # One-shot: build dataset, run EDA, train baselines.
+  pipeline:
+    build:
+      context: .
+    image: fraud-detection:latest
+    environment:
+      FRAUD_DATA_SOURCE: ${FRAUD_DATA_SOURCE:-synthetic}
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - ./mlruns:/app/mlruns
+    command: ["bash", "-lc", "fraud-data && fraud-eda && fraud-baseline --save"]
+
+  # Phase 0.5 model bake-off -> writes leaderboard + figures, logs to MLflow.
+  bakeoff:
+    image: fraud-detection:latest
+    build:
+      context: .
+    environment:
+      FRAUD_DATA_SOURCE: ${FRAUD_DATA_SOURCE:-synthetic}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-file:/app/mlruns}
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - ./mlruns:/app/mlruns
+    command: ["bash", "-lc", "fraud-bakeoff"]
+
+  # Run the test suite in the container.
+  tests:
+    image: fraud-detection:latest
+    build:
+      context: .
+    command: ["pytest", "-q"]
+
+  # MLflow tracking UI — browse the bake-off experiment at http://localhost:5000
+  mlflow:
+    image: fraud-detection:latest
+    build:
+      context: .
+    working_dir: /app
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/app/mlruns
+    command:
+      - "bash"
+      - "-lc"
+      - "mlflow ui --host 0.0.0.0 --port 5000 --backend-store-uri file:/app/mlruns"
