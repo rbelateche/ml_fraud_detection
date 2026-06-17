@@ -32,6 +32,7 @@ ml = [
     "optuna>=3.6",
     "mlflow>=2.12",
     "imbalanced-learn>=0.12",
+    "tabulate>=0.9",
 ]
 # Data acquisition from Kaggle (optional backend).
 kaggle = ["kaggle>=1.6"]
@@ -45,6 +46,7 @@ dev = [
 fraud-data = "fraud_detection.data.cli:main"
 fraud-eda = "fraud_detection.eda.profile:main"
 fraud-baseline = "fraud_detection.models.baseline:main"
+fraud-bakeoff = "fraud_detection.bakeoff.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

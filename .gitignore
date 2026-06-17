@@ -34,6 +34,7 @@ reports/figures/*
 !reports/figures/.gitkeep
 mlruns/
 mlartifacts/
+mlflow.db
 
 # Secrets / credentials
 .env
@@ -47,3 +48,7 @@ kaggle.json
 .idea/
 .vscode/
 *.log
+
+# Internal working docs (local only — not part of the published repo).
+plan.md
+docs/ML_CONCEPTS_EXPLAINED.md
