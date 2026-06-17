@@ -17,7 +17,7 @@ WORKDIR /app
 # Install dependencies first (better layer caching).
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install -e '.[ml,dev]'
+RUN pip install -e '.[ml,dev,serving]'
 
 # Tests live outside the package; copy them for the CI/test target.
 COPY tests ./tests
