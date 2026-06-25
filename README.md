@@ -36,7 +36,7 @@ This repository is built in phases. Each phase is delivered on its own branch an
 | **1. Serving** | FastAPI inference API (`/score`), warm-loaded model bundle, latency benchmark | ✅ |
 | 2. Features | Feast + Redis online store, offline/online parity | planned |
 | 3. Streaming | Kafka replay → live scoring | planned |
-| 4. Monitoring | Evidently drift + Prometheus/Grafana | planned |
+| **4. Monitoring** | PSI drift detection (`fraud-drift`) + Prometheus serving metrics (`/metrics`) | ✅ |
 
 ---
 
@@ -65,7 +65,7 @@ flowchart LR
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[ml,dev,serving]'
+pip install -e '.[ml,dev,serving,monitoring]'
 
 fraud-data        # build the dataset (synthetic by default, no credentials)
 fraud-eda         # write EDA figures to reports/figures/
@@ -73,6 +73,7 @@ fraud-baseline    # train the dummy + logistic baselines and print metrics
 fraud-bakeoff     # run the Phase 0.5 model tournament -> leaderboard + artifacts
 fraud-bench       # benchmark serving latency (p50/p95/p99) vs the 50 ms SLA
 fraud-serve       # start the inference API at http://localhost:8000 (docs at /docs)
+fraud-drift       # compute feature + score drift (PSI); add --inject-drift to see an alert
 pytest -q         # run the test suite
 ```
 
@@ -238,6 +239,75 @@ curl -s -X POST localhost:8000/score -H 'Content-Type: application/json' -d '{
 
 ---
 
+## Phase 4 — monitoring
+
+A model is only as good as the data it sees *today*. Phase 4 adds two things that
+catch a model going stale **before** the delayed fraud labels arrive weeks later.
+
+### 1. Drift detection — `fraud-drift`
+
+[Population Stability Index (PSI)](https://en.wikipedia.org/wiki/Population_stability_index)
+measures how far live traffic has moved from the baseline the model knows. It is
+computed in pure numpy/pandas — no heavyweight dependency — so the maths is
+transparent and CI stays fast.
+
+```bash
+fraud-drift                 # older half vs newer half of the data
+fraud-drift --inject-drift  # perturb the recent window to see the alert fire
+```
+
+It reports a per-feature PSI plus, when a trained bundle is present, the **model
+score** PSI (the single most actionable signal — the model's *output* is moving).
+Reading follows the industry convention:
+
+| PSI | Meaning | Action |
+|---|---|---|
+| `< 0.10` | stable | none |
+| `0.10 – 0.25` | moderate shift | investigate |
+| `≥ 0.25` | major shift | retrain / alert |
+
+The report is written to `artifacts/drift_report.json`, and the command **exits
+non-zero on a major alert** so it can gate a scheduled pipeline.
+
+```text
+================ DRIFT REPORT ================
+  reference rows : 6000
+  current rows   : 6000
+  max feature PSI: 1.8421
+  score PSI      : 0.9123  (major)
+  ---------------------------------------------
+  feature                      PSI  severity
+  amount                    1.8421  major  🚨
+  hour                      1.2050  major  🚨
+  merchant_risk             0.4133  major  🚨
+  ...
+  ---------------------------------------------
+  🚨 ALERT — major drift detected
+==============================================
+```
+
+### 2. Live serving metrics — `GET /metrics`
+
+The inference API exposes Prometheus metrics so throughput, latency and the live
+score distribution are observable while transactions flow:
+
+| Metric | Type | What it tells you |
+|---|---|---|
+| `fraud_score_requests_total` | counter | throughput |
+| `fraud_decisions_total{decision}` | counter | block vs allow split |
+| `fraud_score_latency_seconds` | histogram | latency percentiles vs the 50 ms SLA |
+| `fraud_score_probability` | histogram | score distribution — real-time drift signal |
+
+```bash
+fraud-serve
+curl -s localhost:8000/metrics | grep fraud_
+```
+
+Prometheus is an optional dependency (the `monitoring` extra). Without it the API
+still runs — `/metrics` simply answers `503`.
+
+---
+
 ## Design decisions & trade-offs
 
 - **Time-based (out-of-time) split, not random.** Fraud drifts, so a random split
@@ -279,6 +349,16 @@ src/fraud_detection/
     latency.py         # p50/p99 latency measurement
     plots.py           # PR / reliability / latency / cost figures
     cli.py             # `fraud-bakeoff`
+  serving/
+    bundle.py          # warm-loaded model bundle + single scoring path
+    app.py             # FastAPI app (/health, /model, /score, /metrics)
+    benchmark.py       # p50/p95/p99 latency probe vs the 50 ms SLA
+    cli.py             # `fraud-serve`, `fraud-bench`
+  monitoring/
+    drift.py           # Population Stability Index (PSI) maths
+    report.py          # per-feature + score drift report
+    metrics.py         # Prometheus serving metrics (optional dependency)
+    cli.py             # `fraud-drift`
 tests/                 # pytest suite
 Dockerfile, docker-compose.yml, Makefile, .github/workflows/ci.yml
 ```
