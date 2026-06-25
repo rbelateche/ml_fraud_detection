@@ -12,11 +12,13 @@ The model bundle is warm-loaded once at startup (lifespan) and kept on
 
 from __future__ import annotations
 
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from fraud_detection.logging_utils import get_logger
+from fraud_detection.monitoring.metrics import build_serving_metrics
 from fraud_detection.serving.bundle import ModelBundle
 from fraud_detection.serving.schemas import (
     HealthResponse,
@@ -60,6 +62,8 @@ def create_app(bundle: ModelBundle | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.bundle = bundle
+    # Prometheus collectors (None when the `monitoring` extra is not installed).
+    app.state.metrics = build_serving_metrics()
 
     @app.get("/health", response_model=HealthResponse, tags=["ops"])
     def health(request: Request) -> HealthResponse:
@@ -83,7 +87,16 @@ def create_app(bundle: ModelBundle | None = None) -> FastAPI:
     @app.post("/score", response_model=ScoreResponse, tags=["inference"])
     def score(txn: Transaction, request: Request) -> ScoreResponse:
         b = _require_bundle(request)
+        start = time.perf_counter()
         d = b.score(txn.model_dump())
+        elapsed = time.perf_counter() - start
+        metrics = request.app.state.metrics
+        if metrics is not None:
+            metrics.observe(
+                probability=d.probability,
+                decision=d.decision,
+                latency_seconds=elapsed,
+            )
         return ScoreResponse(
             probability=d.probability,
             is_fraud=d.is_fraud,
@@ -91,6 +104,18 @@ def create_app(bundle: ModelBundle | None = None) -> FastAPI:
             threshold=d.threshold,
             model_name=d.model_name,
         )
+
+    @app.get("/metrics", tags=["ops"])
+    def metrics(request: Request) -> Response:
+        m = request.app.state.metrics
+        if m is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Metrics unavailable. Install the 'monitoring' extra "
+                "(prometheus-client) to enable /metrics.",
+            )
+        payload, content_type = m.render()
+        return Response(content=payload, media_type=content_type)
 
     return app
 

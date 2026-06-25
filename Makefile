@@ -2,14 +2,14 @@
 .DEFAULT_GOAL := help
 PY ?= python
 
-.PHONY: help install data eda baseline bakeoff test lint fmt clean docker-build docker-run
+.PHONY: help install data eda baseline bakeoff test lint fmt clean docker-build docker-run drift
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install package with dev + ml extras (editable)
-	$(PY) -m pip install -e '.[ml,dev]'
+	$(PY) -m pip install -e '.[ml,dev,serving,monitoring]'
 
 data: ## Build/refresh the dataset
 	fraud-data
@@ -22,6 +22,9 @@ baseline: ## Train Phase 0 baselines (dummy + logistic)
 
 bakeoff: ## Run the Phase 0.5 model tournament
 	fraud-bakeoff
+
+drift: ## Compute feature + score drift (PSI). Add ARGS="--inject-drift" to demo an alert
+	fraud-drift $(ARGS)
 
 test: ## Run the test suite
 	pytest -q
