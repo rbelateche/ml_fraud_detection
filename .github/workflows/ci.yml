@@ -24,7 +24,7 @@ jobs:
       - name: Install package (dev + ml)
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[ml,dev]'
+          pip install -e '.[ml,dev,serving]'
 
       - name: Lint
         run: ruff check src tests
@@ -41,7 +41,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install
-        run: pip install -e '.[ml,dev]'
+        run: pip install -e '.[ml,dev,serving]'
       - name: Smoke-test pipeline (small dataset)
         env:
           FRAUD_SYNTH_N_TRANSACTIONS: "12000"
@@ -51,3 +51,4 @@ jobs:
           fraud-eda
           fraud-baseline
           fraud-bakeoff --quick --no-mlflow
+          fraud-bench --n 500

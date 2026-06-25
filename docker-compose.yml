@@ -6,6 +6,7 @@
 #   docker compose run --rm bakeoff       # Phase 0.5 model tournament
 #   docker compose run --rm tests         # pytest
 #   docker compose up mlflow              # MLflow tracking UI at :5000
+#   docker compose up serving             # Phase 1 inference API at :8000
 
 services:
   # One-shot: build dataset, run EDA, train baselines.
@@ -43,6 +44,25 @@ services:
     build:
       context: .
     command: ["pytest", "-q"]
+
+  # Phase 1 inference API. Serves artifacts/best_model.joblib at http://localhost:8000
+  # (run `docker compose run --rm bakeoff` first to produce the model bundle).
+  # Docs at http://localhost:8000/docs
+  serving:
+    image: fraud-detection:latest
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    command: ["fraud-serve", "--host", "0.0.0.0", "--port", "8000"]
 
   # MLflow tracking UI — browse the bake-off experiment at http://localhost:5000
   mlflow:

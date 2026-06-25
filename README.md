@@ -33,7 +33,7 @@ This repository is built in phases. Each phase is delivered on its own branch an
 |---|---|---|
 | **0. Foundations** | Repo, config, data layer, EDA, dummy + logistic baselines, Docker, CI | ✅ |
 | **0.5 Model bake-off** | Multi-model tournament, time-based split, calibration, cost-based threshold, MLflow leaderboard | ✅ |
-| 1. Serving | FastAPI inference, latency benchmark | planned |
+| **1. Serving** | FastAPI inference API (`/score`), warm-loaded model bundle, latency benchmark | ✅ |
 | 2. Features | Feast + Redis online store, offline/online parity | planned |
 | 3. Streaming | Kafka replay → live scoring | planned |
 | 4. Monitoring | Evidently drift + Prometheus/Grafana | planned |
@@ -65,12 +65,14 @@ flowchart LR
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[ml,dev]'
+pip install -e '.[ml,dev,serving]'
 
 fraud-data        # build the dataset (synthetic by default, no credentials)
 fraud-eda         # write EDA figures to reports/figures/
 fraud-baseline    # train the dummy + logistic baselines and print metrics
 fraud-bakeoff     # run the Phase 0.5 model tournament -> leaderboard + artifacts
+fraud-bench       # benchmark serving latency (p50/p95/p99) vs the 50 ms SLA
+fraud-serve       # start the inference API at http://localhost:8000 (docs at /docs)
 pytest -q         # run the test suite
 ```
 
@@ -81,6 +83,7 @@ docker compose run --rm pipeline   # data -> EDA -> baselines
 docker compose run --rm bakeoff    # the model tournament
 docker compose run --rm tests      # pytest
 docker compose up mlflow           # MLflow UI at http://localhost:5000
+docker compose up serving          # inference API at http://localhost:8000
 ```
 
 `make help` lists all developer shortcuts.
@@ -183,6 +186,55 @@ decision rule encodes that automatically.
 - `reports/figures/bakeoff_cost_curve.png` — cost vs threshold for the winner.
 
 Run `fraud-bakeoff --tune` to add Optuna tuning, or `--quick` for a fast pass.
+
+---
+
+## Phase 1 — serving
+
+The bake-off persists the winner as a self-contained bundle
+(`artifacts/best_model.joblib` = preprocessing + model + calibrator + threshold +
+feature list). Phase 1 serves it behind a low-latency FastAPI app.
+
+```bash
+fraud-serve                      # API at http://localhost:8000  (OpenAPI docs at /docs)
+```
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Liveness + whether a model is loaded. |
+| `/model` | GET | Serving model name, threshold, and feature list. |
+| `/score` | POST | Score one transaction → calibrated probability + block/allow decision. |
+
+```bash
+curl -s -X POST localhost:8000/score -H 'Content-Type: application/json' -d '{
+  "amount": 249.99, "amount_log": 5.525, "hour": 23, "day_of_week": 5,
+  "is_night": 1, "is_weekend": 1, "card_age_days": 412.0, "txn_count_1h": 3,
+  "txn_count_24h": 8, "amount_mean_24h": 86.40, "amount_to_mean_ratio": 2.894,
+  "distance_from_home": 57.21, "merchant_risk": 0.82,
+  "category": "electronics", "channel": "online", "device_type": "web" }'
+# -> {"probability":0.011,"is_fraud":false,"decision":"allow","threshold":0.033,"model_name":"logistic_regression"}
+```
+
+**Design notes:**
+
+- **One scoring path.** The API and the benchmark both call `ModelBundle.score`,
+  so what you measure is what you serve (no skew between paths).
+- **Warm start.** The bundle is loaded once at startup and kept on `app.state`,
+  so requests never touch disk.
+- **Contract = schema.** The `/score` request model mirrors
+  `schema.feature_columns()` exactly; a test fails if they ever diverge.
+- **SLA enforced in the open.** `fraud-bench` reports p50/p95/p99 for single-row
+  scoring and checks them against the **50 ms** budget — the same rule the
+  bake-off uses to pick the model. Measured locally: **p99 ≈ 2.6 ms**.
+
+```text
+=============== SERVING LATENCY ===============
+  model        : logistic_regression
+  p50 / p95    : 1.8 ms / 2.4 ms
+  p99          : 2.6 ms   (SLA < 50 ms)
+  meets SLA    : ✅ yes
+===============================================
+```
 
 ---
 
